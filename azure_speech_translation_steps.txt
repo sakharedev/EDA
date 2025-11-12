@@ -1,0 +1,149 @@
+# AZURE SPEECH TRANSLATION FULL SETUP GUIDE (BY HARSHIL)
+
+## STEP 1 — CREATE AZURE SPEECH RESOURCE
+az cognitiveservices account create \
+  --name HarshilSpeechService \
+  --resource-group IoTEdgeResources \
+  --kind SpeechServices \
+  --sku F0 \
+  --location southeastasia
+
+# Get keys
+az cognitiveservices account keys list \
+  --name HarshilSpeechService \
+  --resource-group IoTEdgeResources -o json
+
+# Copy key1 and note the region (southeastasia)
+
+
+## STEP 2 — SET ENVIRONMENT VARIABLES
+export AZURE_SPEECH_KEY="YOUR_KEY_HERE"
+export AZURE_SPEECH_REGION="southeastasia"
+
+
+## STEP 3 — CREATE PYTHON TRANSLATION SCRIPT
+# Create the file
+code translate_wav.py
+
+# Paste the following code
+import os
+import azure.cognitiveservices.speech as speechsdk
+
+def translate_wav(
+    wav_path: str,
+    target_language: str,
+    source_language: str | None = None,
+    output_txt: str | None = None
+):
+    speech_key = os.getenv("AZURE_SPEECH_KEY")
+    speech_region = os.getenv("AZURE_SPEECH_REGION")
+    if not speech_key or not speech_region:
+        raise RuntimeError("Please set AZURE_SPEECH_KEY and AZURE_SPEECH_REGION.")
+
+    if not os.path.isfile(wav_path):
+        raise FileNotFoundError(f"WAV file not found: {wav_path}")
+
+    translation_config = speechsdk.translation.SpeechTranslationConfig(
+        subscription=speech_key, region=speech_region
+    )
+
+    if source_language:
+        translation_config.speech_recognition_language = source_language
+        auto_langs = None
+    else:
+        auto_langs = speechsdk.languageconfig.AutoDetectSourceLanguageConfig(
+            languages=["en-US", "hi-IN", "mr-IN", "gu-IN"]
+        )
+
+    translation_config.add_target_language(target_language)
+
+    audio_config = speechsdk.audio.AudioConfig(filename=wav_path)
+
+    recognizer = (
+        speechsdk.translation.TranslationRecognizer(
+            translation_config=translation_config,
+            audio_config=audio_config,
+            auto_detect_source_language_config=auto_langs,
+        )
+        if not source_language
+        else speechsdk.translation.TranslationRecognizer(
+            translation_config=translation_config, audio_config=audio_config
+        )
+    )
+
+    translated_lines = []
+    done = False
+
+    def recognized(evt):
+        result = evt.result
+        if result.reason == speechsdk.ResultReason.TranslatedSpeech:
+            tgt = result.translations.get(target_language, "")
+            if tgt:
+                print(f"[{target_language.upper()}] {tgt}")
+                translated_lines.append(tgt)
+
+    def stop(evt):
+        nonlocal done
+        done = True
+
+    recognizer.recognized.connect(recognized)
+    recognizer.session_stopped.connect(stop)
+    recognizer.canceled.connect(stop)
+
+    print("Starting translation...")
+    recognizer.start_continuous_recognition()
+    while not done:
+        pass
+    recognizer.stop_continuous_recognition()
+
+    if output_txt:
+        with open(output_txt, "w", encoding="utf-8") as f:
+            f.write("\n".join(translated_lines))
+        print(f"Saved translated text → {output_txt}")
+
+def main():
+    import argparse
+
+    p = argparse.ArgumentParser()
+    p.add_argument("wav", help="Path to WAV file")
+    p.add_argument("--to", required=True, help="Target language code, e.g., hi or en")
+    p.add_argument("--from-lang", default=None, help="Source language code, e.g., en-US")
+    p.add_argument("--out", default=None, help="Output text file")
+    a = p.parse_args()
+
+    translate_wav(a.wav, a.to, a.from_lang, a.out)
+
+if __name__ == "__main__":
+    main()
+
+
+## STEP 4 — INSTALL DEPENDENCY
+pip install --user azure-cognitiveservices-speech
+
+
+## STEP 5 — CREATE A SAMPLE WAV FILE (ON LAPTOP)
+# Using pyttsx3 (inside virtual environment on your system)
+python3 - <<'PY'
+import pyttsx3
+engine = pyttsx3.init()
+engine.save_to_file("Hello, this is a sample voice for Azure Speech translation test.", "sample.wav")
+engine.runAndWait()
+print("Saved sample.wav")
+PY
+
+# Upload sample.wav to Cloud Shell
+
+
+## STEP 6 — RUN TRANSLATION
+python3 translate_wav.py sample.wav --to hi --from-lang en-US --out translated_hi.txt
+
+# View translation
+cat translated_hi.txt
+
+
+## STEP 7 — TRANSLATE TO OTHER LANGUAGES (OPTIONAL)
+# Marathi
+python3 translate_wav.py sample.wav --to mr --from-lang en-US --out translated_mr.txt
+
+# Gujarati
+python3 translate_wav.py sample.wav --to gu --from-lang en-US --out translated_gu.txt
